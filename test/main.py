@@ -23,7 +23,7 @@ with open('config/pixel_mapping.yaml', 'r') as f:
 
 # مسیر تصویر ورودی و خروجی
 input_image_path = '2.jpg'
-output_image_path = 'output.jpg'
+output_image_path = '2_main_output.jpg'
 
 # پاک کردن فایل خروجی قبلی
 if os.path.exists(output_image_path):
@@ -107,44 +107,49 @@ for result in detection_results:
             height_px = y_max_roi - y_min_roi
             dim_mm = mapping.get_dimension_mm(width_px, height_px, pixel_mapping)
             
-            # --- تشخیص طول ---
+            # --- تشخیص طول (با تغییر اندازه تصویر به 1024x1024) ---
             billet_roi = frame[int(y_min):int(y_max), int(x_min):int(x_max)]
-            # ⚠️ تغییر حیاتی: تبدیل BGR به RGB برای مدل Pose
-            billet_roi_rgb = cv2.cvtColor(billet_roi, cv2.COLOR_BGR2RGB)
-            pose_results = pose_model(billet_roi_rgb, verbose=False)
+            h_roi, w_roi = billet_roi.shape[:2]
+
+            # ⚠️ تغییر حیاتی: تغییر اندازه ROI به 1024x1024 (همان اندازه آموزش)
+            billet_roi_resized = cv2.resize(billet_roi, (3840, 2160))
+
+            # تبدیل BGR به RGB
+            billet_roi_rgb = cv2.cvtColor(billet_roi_resized, cv2.COLOR_BGR2RGB)
+
+            # اجرای مدل با تنظیم conf=0.2 (کاهش آستانه اطمینان)
+            pose_results = pose_model(billet_roi_rgb, conf=0.2, verbose=False)
+
             length_mm = "N/A"
             distance_px = 0
-            # استخراج نقاط کلیدی
+
             if len(pose_results) > 0 and len(pose_results[0].keypoints.xy) > 0:
                 keypoints = pose_results[0].keypoints.xy.cpu().numpy()[0]
-                print(f"   📍 Keypoints detected: {len(keypoints)} points.")
-                # چاپ تمام نقاط
-                for i, kpt in enumerate(keypoints):
-                    kx, ky = kpt
-                    print(f"      Point {i}: X={kx:.2f}, Y={ky:.2f}")
-                    # رسم نقاط دیباگ (قرمز)
-                    kx_orig = x_min + kx
-                    ky_orig = y_min + ky
-                    cv2.circle(frame, (int(kx_orig), int(ky_orig)), 3, (0, 0, 255), -1)
-                    cv2.putText(frame, str(i), (int(kx_orig)+5, int(ky_orig)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
-                if len(keypoints) >= 2:
-                    # تغییر اصلی: استفاده از نقطه اول و آخر به جای نقطه اول و دوم
-                    x1, y1 = keypoints[0]
-                    x2, y2 = keypoints[-1]  # تغییر از [1] به [-1]
-                    x1_orig = x_min + x1
-                    y1_orig = y_min + y1
-                    x2_orig = x_min + x2
-                    y2_orig = y_min + y2
-                    distance_px = np.sqrt((x2_orig - x1_orig)**2 + (y2_orig - y1_orig)**2)
-                    print(f"   📏 Calculated Distance: {distance_px:.2f} px")
-                    length_mm = mapping.get_length_mm(distance_px, pixel_mapping)
-                    # رسم خط و نقاط اصلی
-                    point_color = (255, 0, 255) # بنفش
-                    line_color = (255, 255, 0)  # فیروزه‌ای
-                    cv2.line(frame, (int(x1_orig), int(y1_orig)), (int(x2_orig), int(y2_orig)), line_color, 3)
-                    cv2.circle(frame, (int(x1_orig), int(y1_orig)), 6, point_color, -1)
-                    cv2.circle(frame, (int(x2_orig), int(y2_orig)), 6, point_color, -1)
+                
+                # تبدیل مختصات از تصویر ریسایز شده به ROI اصلی
+                x1_scaled, y1_scaled = keypoints[0]
+                x2_scaled, y2_scaled = keypoints[1]
+                
+                # محاسبه مختصات در ROI اصلی (با توجه به نسبت ریسایز)
+                x1_roi = (x1_scaled / 3840) * w_roi
+                y1_roi = (y1_scaled / 2160) * h_roi
+                x2_roi = (x2_scaled / 3840) * w_roi
+                y2_roi = (y2_scaled / 2160) * h_roi
+                
+                # تبدیل مختصات به تصویر اصلی (Frame)
+                x1_orig = x_min + x1_roi
+                y1_orig = y_min + y1_roi
+                x2_orig = x_min + x2_roi
+                y2_orig = y_min + y2_roi
+                
+                # محاسبه فاصله
+                distance_px = np.sqrt((x2_orig - x1_orig)**2 + (y2_orig - y1_orig)**2)
+                length_mm = mapping.get_length_mm(distance_px, pixel_mapping)
+                
+                # رسم خط و نقاط
+                cv2.line(frame, (int(x1_orig), int(y1_orig)), (int(x2_orig), int(y2_orig)), (255, 255, 0), 3)
+                cv2.circle(frame, (int(x1_orig), int(y1_orig)), 6, (255, 0, 255), -1)
+                cv2.circle(frame, (int(x2_orig), int(y2_orig)), 6, (255, 0, 255), -1)
             else:
                 print(f"   ❌ No keypoints found by pose model!")
 
@@ -175,4 +180,4 @@ cv2.line(frame, (line_x_global, 0), (line_x_global, frame.shape[0]), (0, 0, 255)
 
 # ذخیره تصویر خروجی
 cv2.imwrite(output_image_path, frame)
-print(f"✅ تصویر خروجی ذخیره شد: {output_image_path}")
+print(f"✅ image saved at: {output_image_path}")
